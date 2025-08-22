@@ -17,6 +17,7 @@ import com.pathplanner.lib.path.PathPlannerPath;
 import com.pathplanner.lib.util.DriveFeedforwards;
 import com.pathplanner.lib.util.swerve.SwerveSetpoint;
 import com.pathplanner.lib.util.swerve.SwerveSetpointGenerator;
+import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.SimpleMotorFeedforward;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -25,6 +26,7 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveDriveKinematics;
 import edu.wpi.first.math.trajectory.Trajectory;
 import edu.wpi.first.math.util.Units;
+import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -33,6 +35,7 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Config;
 import frc.robot.Constants;
+import frc.robot.constants.DrivetrainConstants;
 import frc.robot.subsystems.swervedrive.Vision.Cameras;
 import java.io.File;
 import java.io.IOException;
@@ -41,7 +44,10 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
+
+import frc.robot.utils.NetworkTablesUtils;
 import org.json.simple.parser.ParseException;
+import org.photonvision.PhotonCamera;
 import org.photonvision.targeting.PhotonPipelineResult;
 import swervelib.SwerveController;
 import swervelib.SwerveDrive;
@@ -55,7 +61,10 @@ import swervelib.telemetry.SwerveDriveTelemetry.TelemetryVerbosity;
 
 public class SwerveSubsystem extends SubsystemBase
 {
-
+  private final NetworkTablesUtils NTUtils = NetworkTablesUtils.getTable("debug");
+  //TODO: add swerve constants
+  private final PIDController drivePID = new PIDController(0, 0, 0);
+  private final PIDController turnPID = new PIDController(0, 0, 0);
   /**
    * Swerve drive object.
    */
@@ -591,6 +600,38 @@ public class SwerveSubsystem extends SubsystemBase
     {
       zeroGyro();
     }
+  }
+
+  public boolean driveToPoint(Pose2d point, double tolerance, double maxVel, double maxRVel, double robotYComp, boolean isContinuous) {
+    double xVel, yVel, rVel;
+    double translationMag;
+
+    drivePID.setSetpoint(0.0);
+    turnPID.setSetpoint(point.getRotation().getRadians());
+
+    Translation2d difference = point.minus(swerveDrive.getPose()).getTranslation();
+
+    if (isContinuous) {
+      translationMag = maxVel;
+    }
+    else {
+      translationMag = -DrivetrainConstants.MAX_DRIVE_VELOCITY_MPS * drivePID.calculate(Math.sqrt(Math.pow(difference.getX(), 2) + Math.pow(difference.getY(), 2)));
+    }
+
+    xVel = translationMag * Math.cos(difference.getAngle().getRadians());
+    yVel = translationMag * Math.sin(difference.getAngle().getRadians());
+    rVel = DrivetrainConstants.MAX_ANGULAR_SPEED * turnPID.calculate(swerveDrive.getYaw().getRadians());
+    if (rVel > 0) {
+      rVel = Math.min(rVel, maxRVel);
+    }
+    else {
+      rVel = Math.max(rVel, -maxRVel);
+    }
+    Translation2d driveVals = new Translation2d(xVel, yVel);
+
+    drive(driveVals, rVel, true);
+
+    return drivePID.atSetpoint() && turnPID.atSetpoint();
   }
 
   /**
